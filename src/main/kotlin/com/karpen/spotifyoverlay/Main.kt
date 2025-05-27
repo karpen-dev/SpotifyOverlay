@@ -5,8 +5,10 @@ import javafx.application.Platform
 import javafx.geometry.Insets
 import javafx.scene.Scene
 import javafx.scene.control.Button
+import javafx.scene.control.MenuItem
 import javafx.scene.image.Image
 import javafx.scene.image.ImageView
+import javafx.scene.input.MouseEvent
 import javafx.scene.layout.*
 import javafx.scene.paint.Color
 import javafx.scene.text.Text
@@ -15,11 +17,16 @@ import javafx.stage.StageStyle
 import org.apache.hc.client5.http.classic.methods.HttpGet
 import org.apache.hc.client5.http.classic.methods.HttpPost
 import org.apache.hc.client5.http.classic.methods.HttpPut
+import org.apache.hc.client5.http.classic.methods.HttpUriRequest
 import org.apache.hc.client5.http.config.RequestConfig
 import org.apache.hc.client5.http.impl.classic.HttpClients
 import org.apache.hc.core5.http.io.entity.StringEntity
-import org.slf4j.LoggerFactory
 import org.json.JSONObject
+import org.slf4j.LoggerFactory
+import java.awt.*
+import java.awt.event.ActionEvent
+import java.awt.event.ActionListener
+import java.awt.event.MouseAdapter
 import java.io.InputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -84,7 +91,6 @@ class SpotifyOverlay : Application() {
         }
     }
 
-
     private fun setupUI(stage: Stage) {
         albumArt = ImageView(defaultAlbumImage).apply {
             fitWidth = 50.0
@@ -115,7 +121,7 @@ class SpotifyOverlay : Application() {
         }
 
         val content = createLayout(prevBtn, playPauseBtn, nextBtn).apply {
-            this.isMouseTransparent = true
+            this.isMouseTransparent = false
         }
 
         setupSceneAndStage(stage, content)
@@ -161,7 +167,10 @@ class SpotifyOverlay : Application() {
 
         stage.apply {
             title = "Spotify Overlay"
+
+            initStyle(StageStyle.UTILITY)
             initStyle(StageStyle.TRANSPARENT)
+
             this.scene = scene
             isAlwaysOnTop = true
             x = javafx.stage.Screen.getPrimary().visualBounds.width - 320
@@ -298,24 +307,39 @@ class SpotifyOverlay : Application() {
 
     private fun getCurrentTrack(): SpotifyTrack {
         val requestConfig = RequestConfig.custom()
-            .setConnectTimeout(3, TimeUnit.SECONDS)
-            .setResponseTimeout(3, TimeUnit.SECONDS)
+            .setConnectTimeout(10, TimeUnit.SECONDS)
+            .setResponseTimeout(10, TimeUnit.SECONDS)
             .build()
 
-        HttpClients.custom().setDefaultRequestConfig(requestConfig).build().use { client ->
-            val get = HttpGet("https://api.spotify.com/v1/me/player/currently-playing")
-            get.setHeader("Authorization", "Bearer $accessToken")
+        return try {
+            HttpClients.custom()
+                .setDefaultRequestConfig(requestConfig)
+                .build()
+                .use { client ->
+                    val get = HttpGet("https://api.spotify.com/v1/me/player/currently-playing")
+                    get.setHeader("Authorization", "Bearer $accessToken")
 
-            return client.execute(get) { response ->
-                when (response.code) {
-                    200 -> {
-                        val json = response.entity.content.bufferedReader().use { it.readText() }
-                        parseTrackInfo(json)
+                    client.execute(get).use { response ->
+                        when (response.code) {
+                            200 -> {
+                                val json = response.entity?.content?.bufferedReader()?.use { it.readText() }
+                                    ?: return@use SpotifyTrack("Error", "Empty response", "", false)
+                                parseTrackInfo(json)
+                            }
+                            204 -> SpotifyTrack("Not Playing", "", "", false)
+                            401 -> SpotifyTrack("Auth Error", "Invalid or expired token", "", false)
+                            403 -> SpotifyTrack("Auth Error", "Insufficient permissions", "", false)
+                            429 -> SpotifyTrack("Error", "Rate limit exceeded", "", false)
+                            else -> {
+                                val errorBody = response.entity?.content?.bufferedReader()?.use { it.readText() }
+                                    ?: "No error details"
+                                SpotifyTrack("API Error", "Status: ${response.code}, $errorBody", "", false)
+                            }
+                        }
                     }
-                    204 -> SpotifyTrack("Not Playing", "", "", false)
-                    else -> SpotifyTrack("API Error", "Status: ${response.code}", "", false)
                 }
-            }
+        } catch (e: Exception) {
+            SpotifyTrack("Network Error", e.message ?: "Unknown error", "", false)
         }
     }
 
@@ -344,33 +368,58 @@ class SpotifyOverlay : Application() {
     private fun controlPlayback(action: String) {
         apiExecutor.submit {
             try {
-                val endpoint = when (action) {
-                    "toggle" -> if (playPauseBtn.text == "⏸") "pause" else "play"
-                    else -> action
+                if (accessToken.isEmpty()) {
+                    Platform.runLater {
+                        trackName.text = "Not Authenticated"
+                        artistName.text = "Please login first"
+                    }
+                    return@submit
                 }
 
-                logger.debug("Sending playback command: $endpoint")
-                val put = HttpPut("https://api.spotify.com/v1/me/player/$endpoint")
-                put.setHeader("Authorization", "Bearer $accessToken")
-                httpClient.execute(put) { response ->
-                    if (response.code == 204 || response.code == 200) {
-                        logger.debug("Playback command successful")
-                        if (action == "toggle") {
-                            Platform.runLater {
-                                playPauseBtn.text = if (endpoint == "pause") "▶" else "⏸"
+                val (endpoint, method) = when (action) {
+                    "previous" -> "previous" to HttpPost::class.java
+                    "next" -> "next" to HttpPost::class.java
+                    "toggle" -> (if (playPauseBtn.text == "⏸") "pause" else "play") to HttpPut::class.java
+                    else -> return@submit
+                }
+
+                logger.debug("Sending $endpoint command to Spotify API")
+
+                val request = when (method) {
+                    HttpPost::class.java -> HttpPost("https://api.spotify.com/v1/me/player/$endpoint")
+                    HttpPut::class.java -> HttpPut("https://api.spotify.com/v1/me/player/$endpoint")
+                    else -> return@submit
+                }
+
+                request.apply {
+                    setHeader("Authorization", "Bearer $accessToken")
+                    setHeader("Content-Type", "application/json")
+                }
+
+                httpClient.execute(request) { response ->
+                    val result = when (response.code) {
+                        200 or 204 -> {
+                            logger.debug("Command $endpoint succeeded")
+                            if (action == "toggle") {
+                                Platform.runLater {
+                                    playPauseBtn.text = if (endpoint == "pause") "▶" else "⏸"
+                                }
                             }
-                            val track = getCurrentTrack()
-                            Platform.runLater { updateUI(track) }
+                            "Success"
                         }
-                    } else {
-                        logger.warn("Playback command failed with status: ${response.code}")
+                        else -> "Error: ${response.code}"
+                    }
+
+                    if (result != "Success") {
+                        Platform.runLater {
+                            artistName.text = result
+                        }
                     }
                 }
             } catch (e: Exception) {
-                logger.error("Error controlling playback", e)
+                logger.error("Playback control failed", e)
                 Platform.runLater {
-                    trackName.text = "Control Error"
-                    artistName.text = e.message?.take(30) + "..."
+                    artistName.text = "Control error: ${e.message?.take(30)}..."
                 }
             }
         }
