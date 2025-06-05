@@ -12,6 +12,7 @@ import javafx.scene.input.MouseEvent
 import javafx.scene.layout.*
 import javafx.scene.paint.Color
 import javafx.scene.text.Text
+import javafx.stage.Screen
 import javafx.stage.Stage
 import javafx.stage.StageStyle
 import org.apache.hc.client5.http.classic.methods.HttpGet
@@ -28,6 +29,7 @@ import java.awt.event.ActionEvent
 import java.awt.event.ActionListener
 import java.awt.event.MouseAdapter
 import java.io.InputStream
+import java.net.URL
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -72,7 +74,17 @@ class SpotifyOverlay : Application() {
     override fun start(primaryStage: Stage) {
         try {
             logger.info("Starting application...")
-            setupUI(primaryStage)
+
+            primaryStage.initStyle(StageStyle.UTILITY)
+            primaryStage.width = 0.0
+            primaryStage.height = 0.0
+            primaryStage.show()
+
+            val mainStage = Stage().apply {
+                initOwner(primaryStage)
+            }
+
+            setupUI(mainStage)
 
             if (loadTokens()) {
                 logger.info("Using saved tokens")
@@ -96,32 +108,26 @@ class SpotifyOverlay : Application() {
             fitWidth = 50.0
             fitHeight = 50.0
             isPreserveRatio = true
-            this.isMouseTransparent = true
+            isMouseTransparent = true
         }
 
         trackName = Text("Connecting to Spotify...").apply {
             fill = Color.WHITE
             style = "-fx-font-weight: bold;"
-            this.isMouseTransparent = true
+            isMouseTransparent = true
         }
 
         artistName = Text("").apply {
             fill = Color.LIGHTGRAY
-            this.isMouseTransparent = true
+            isMouseTransparent = true
         }
 
-        val prevBtn = createControlButton("⏮") { controlPlayback("previous") }.apply {
-            this.isMouseTransparent = false
-        }
-        playPauseBtn = createControlButton("▶") { controlPlayback("toggle") }.apply {
-            this.isMouseTransparent = false
-        }
-        val nextBtn = createControlButton("⏭") { controlPlayback("next") }.apply {
-            this.isMouseTransparent = false
-        }
+        val prevBtn = createControlButton("⏮") { controlPlayback("previous") }
+        playPauseBtn = createControlButton("▶") { controlPlayback("toggle") }
+        val nextBtn = createControlButton("⏭") { controlPlayback("next") }
 
         val content = createLayout(prevBtn, playPauseBtn, nextBtn).apply {
-            this.isMouseTransparent = false
+            style = "-fx-background-color: rgba(0, 0, 0, 0.7); -fx-background-radius: 10;"
         }
 
         setupSceneAndStage(stage, content)
@@ -166,15 +172,12 @@ class SpotifyOverlay : Application() {
         }
 
         stage.apply {
-            title = "Spotify Overlay"
-
-            initStyle(StageStyle.UTILITY)
             initStyle(StageStyle.TRANSPARENT)
-
             this.scene = scene
             isAlwaysOnTop = true
-            x = javafx.stage.Screen.getPrimary().visualBounds.width - 320
+            x = Screen.getPrimary().visualBounds.width - 320.0
             y = 10.0
+            isResizable = false
             show()
         }
     }
