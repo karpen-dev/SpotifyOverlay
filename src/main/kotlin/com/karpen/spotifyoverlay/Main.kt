@@ -25,18 +25,19 @@ import org.apache.hc.core5.http.io.entity.StringEntity
 import org.json.JSONObject
 import org.slf4j.LoggerFactory
 import java.awt.*
+import java.io.File
+import java.io.FileInputStream
 import java.io.InputStream
-import java.io.OutputStream
 import java.net.InetSocketAddress
-import java.net.URLDecoder
+import java.util.Properties
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 class SpotifyOverlay : Application() {
     private val logger = LoggerFactory.getLogger(SpotifyOverlay::class.java)
 
-    private val clientId = "408fa0b80bcf4ae6be5b4665b629ff1f"
-    private val clientSecret = "fc8ba4efcac94b768c0f1ef1506f5b45"
+    private val properties = Properties()
+
     private val redirectUri = "http://127.0.0.1:8888/callback" // You can put this any url, but it must match the redirect url in the dashboard
     private val scope = "user-read-currently-playing user-modify-playback-state"
 
@@ -59,6 +60,30 @@ class SpotifyOverlay : Application() {
     override fun init() {
         try {
             logger.info("Initializing application...")
+
+            val configFile = File("config.properties").absoluteFile
+            logger.debug("Looking for config at: ${configFile.absolutePath}")
+
+            if (configFile.exists()) {
+                FileInputStream(configFile).use { input ->
+                    properties.load(input)
+                }
+                logger.debug("Loaded properties: $properties")
+
+                if (clientId.isBlank() || clientSecret.isBlank()) {
+                    logger.warn("Client ID or Secret is blank in config file!")
+                }
+            } else {
+                logger.warn("Config file not found! Creating default at ${configFile.absolutePath}")
+                configFile.createNewFile()
+
+                configFile.writeText("""
+                # Spotify API Configuration
+                client.id=your_client_id_here
+                client.secret=your_client_secret_here
+            """.trimIndent())
+            }
+
             val imageStream: InputStream? = javaClass.getResourceAsStream("/images/default_album.png")
             defaultAlbumImage = if (imageStream != null) {
                 Image(imageStream).also {
@@ -69,9 +94,13 @@ class SpotifyOverlay : Application() {
                 Image("https://via.placeholder.com/50?text=No+Image", 50.0, 50.0, true, true)
             }
         } catch (e: Exception) {
-            logger.error("Error loading default album image", e)
+            logger.error("Initialization error", e)
+            throw RuntimeException("Failed to initialize application", e)
         }
     }
+
+    private val clientId: String get() = properties.getProperty("client.id", "").trim()
+    private val clientSecret: String get() = properties.getProperty("client.secret", "").trim()
 
     override fun start(primaryStage: Stage) {
         try {
