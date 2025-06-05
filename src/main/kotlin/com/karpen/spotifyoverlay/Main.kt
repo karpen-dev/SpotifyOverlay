@@ -1,14 +1,15 @@
 package com.karpen.spotifyoverlay
 
+import com.sun.net.httpserver.HttpExchange
+import com.sun.net.httpserver.HttpHandler
+import com.sun.net.httpserver.HttpServer
 import javafx.application.Application
 import javafx.application.Platform
 import javafx.geometry.Insets
 import javafx.scene.Scene
 import javafx.scene.control.Button
-import javafx.scene.control.MenuItem
 import javafx.scene.image.Image
 import javafx.scene.image.ImageView
-import javafx.scene.input.MouseEvent
 import javafx.scene.layout.*
 import javafx.scene.paint.Color
 import javafx.scene.text.Text
@@ -18,26 +19,24 @@ import javafx.stage.StageStyle
 import org.apache.hc.client5.http.classic.methods.HttpGet
 import org.apache.hc.client5.http.classic.methods.HttpPost
 import org.apache.hc.client5.http.classic.methods.HttpPut
-import org.apache.hc.client5.http.classic.methods.HttpUriRequest
 import org.apache.hc.client5.http.config.RequestConfig
 import org.apache.hc.client5.http.impl.classic.HttpClients
 import org.apache.hc.core5.http.io.entity.StringEntity
 import org.json.JSONObject
 import org.slf4j.LoggerFactory
 import java.awt.*
-import java.awt.event.ActionEvent
-import java.awt.event.ActionListener
-import java.awt.event.MouseAdapter
 import java.io.InputStream
-import java.net.URL
+import java.io.OutputStream
+import java.net.InetSocketAddress
+import java.net.URLDecoder
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 class SpotifyOverlay : Application() {
     private val logger = LoggerFactory.getLogger(SpotifyOverlay::class.java)
 
-    private val clientId = "PASTE THIS YOU SPOTIFY APP CLIENT ID"
-    private val clientSecret = "PASTE THIS YOU SPOTIFY APP CLIENT SECRET"
+    private val clientId = "408fa0b80bcf4ae6be5b4665b629ff1f"
+    private val clientSecret = "fc8ba4efcac94b768c0f1ef1506f5b45"
     private val redirectUri = "http://127.0.0.1:8888/callback" // You can put this any url, but it must match the redirect url in the dashboard
     private val scope = "user-read-currently-playing user-modify-playback-state"
 
@@ -53,6 +52,9 @@ class SpotifyOverlay : Application() {
 
     private val apiExecutor = Executors.newCachedThreadPool()
     private val httpClient = HttpClients.createDefault()
+
+    private var trayIcon: TrayIcon? = null
+    private var server: HttpServer? = null
 
     override fun init() {
         try {
@@ -75,6 +77,10 @@ class SpotifyOverlay : Application() {
         try {
             logger.info("Starting application...")
 
+            logger.info("Staring web server...")
+            startWebServer()
+            logger.info("Web server - ok")
+
             primaryStage.initStyle(StageStyle.UTILITY)
             primaryStage.width = 0.0
             primaryStage.height = 0.0
@@ -85,6 +91,7 @@ class SpotifyOverlay : Application() {
             }
 
             setupUI(mainStage)
+            createTrayIcon(mainStage)
 
             if (loadTokens()) {
                 logger.info("Using saved tokens")
@@ -100,6 +107,21 @@ class SpotifyOverlay : Application() {
         } catch (e: Exception) {
             logger.error("Application startup failed", e)
             Platform.exit()
+        }
+    }
+
+    private fun startWebServer() {
+        if (server == null) {
+            val server = HttpServer.create(InetSocketAddress(8888), 0)
+            server.createContext("/callback", CallBackHandler())
+            server.executor = null
+            server.start()
+        }
+    }
+
+    private fun stopWebServer() {
+        if (server != null) {
+            stop()
         }
     }
 
@@ -137,6 +159,41 @@ class SpotifyOverlay : Application() {
         return Button(text).apply {
             style = "-fx-background-color: transparent; -fx-text-fill: white; -fx-font-size: 14px;"
             setOnAction { action() }
+        }
+    }
+
+    private fun createTrayIcon(primaryStage: Stage) {
+        if (!SystemTray.isSupported()) {
+            logger.warn("System tray not supported")
+            return
+        }
+
+        Platform.setImplicitExit(false)
+
+        val tray = SystemTray.getSystemTray()
+        val image = Toolkit.getDefaultToolkit().getImage(javaClass.getResource("/images/icon.png"))
+        val popup = PopupMenu()
+        val exitItem = java.awt.MenuItem("Exit").apply {
+            addActionListener {
+                logger.info("Exiting application from tray icon")
+                Platform.runLater {
+                    SystemTray.getSystemTray().remove(trayIcon)
+                    stopWebServer()
+                    Platform.exit()
+                }
+            }
+        }
+
+        popup.add(exitItem)
+
+        trayIcon = TrayIcon(image, "Spotify Overlay", popup).apply {
+            isImageAutoSize = true
+        }
+
+        try {
+            tray.add(trayIcon)
+        } catch (e: Exception) {
+            logger.error("TrayIcon error: $e")
         }
     }
 
@@ -469,4 +526,24 @@ class SpotifyOverlay : Application() {
 
 fun main() {
     Application.launch(SpotifyOverlay::class.java)
+}
+
+class CallBackHandler : HttpHandler {
+    override fun handle(exchange: HttpExchange) {
+        try {
+            if ("GET" == exchange.requestMethod) {
+                val query = exchange.requestURI.query
+                val params = query?.split("&")?.associate {
+                    val pair = it.split("=")
+                    pair[0] to if (pair.size > 1) pair[1] else ""
+                } ?: emptyMap()
+
+                val code = params["code"] ?: ""
+                exchange.sendResponseHeaders(200, code.toByteArray().size.toLong())
+                exchange.responseBody.use { it.write(code.toByteArray()) }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
 }

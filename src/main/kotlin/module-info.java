@@ -11,6 +11,7 @@ module com.karpen.spotifyoverlay {
     requires org.apache.httpcomponents.core5.httpcore5;
     requires org.slf4j;
     requires org.json;
+    requires jdk.httpserver;
 
     opens com.karpen.spotifyoverlay to javafx.fxml;
     exports com.karpen.spotifyoverlay;
