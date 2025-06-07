@@ -29,9 +29,12 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
 import java.net.InetSocketAddress
+import java.nio.file.Files
+import java.time.Instant
 import java.util.Properties
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlin.time.Duration
 
 class SpotifyOverlay : Application() {
     private val logger = LoggerFactory.getLogger(SpotifyOverlay::class.java)
@@ -362,7 +365,15 @@ class SpotifyOverlay : Application() {
     private fun loadTokens(): Boolean {
         try {
             val path = java.nio.file.Paths.get("tokens.json")
-            if (!java.nio.file.Files.exists(path)) {
+            if (!Files.exists(path)) {
+                return false
+            }
+
+            val lastModifiedTime = Files.getLastModifiedTime(path).toInstant()
+            val now = Instant.now()
+            val duration = java.time.Duration.between(lastModifiedTime, now)
+
+            if (duration.toHours() >= 24) {
                 return false
             }
 
